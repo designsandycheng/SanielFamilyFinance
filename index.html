@@ -672,10 +672,6 @@
         resetForm();
     }
 
-    function editExpense(id) {
-        const exp = STATE.expenses.find(e => e.id === id);
-        if(!exp) return;
-        if (getExpenseStatus(exp) === 'settled') return alert("此消費已完全結算，需還原結算才能修改。");
 
         resetForm();
         document.getElementById('edit-id').value = id;
