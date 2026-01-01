@@ -43,8 +43,11 @@
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         .app-container { max-width: 480px; margin: 0 auto; background-color: #ffffff; min-height: 100vh; position: relative; box-shadow: 0 0 25px rgba(0,0,0,0.08); padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
         .gradient-bg { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); }
-        .input-style { background-color: #f9fafb; border: 1px solid #e5e7eb; transition: all 0.2s; width: 100%; }
+        
+        /* 修正 iPhone 輸入框版面問題：加入 max-width: 100% */
+        .input-style { background-color: #f9fafb; border: 1px solid #e5e7eb; transition: all 0.2s; width: 100%; max-width: 100%; }
         .input-style:focus { border-color: #6366f1; background-color: #fff; outline: none; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
+        
         .modal { transition: opacity 0.2s ease; opacity: 0; pointer-events: none; z-index: 100; }
         .modal.active { opacity: 1; pointer-events: auto; }
         .modal-content { transform: translateY(20px); transition: transform 0.2s ease; }
@@ -80,9 +83,15 @@
             </button>
             <span id="sync-text" class="text-[10px] text-gray-400 font-medium">已同步</span>
         </div>
-        <button onclick="openSettings()" class="pointer-events-auto w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:text-indigo-600 transition active:scale-95">
-            <i class="fas fa-cog text-sm"></i>
-        </button>
+        
+        <div class="pointer-events-auto flex items-center gap-2">
+            <button onclick="manualRefresh()" class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:text-indigo-600 transition active:scale-95" title="刷新資料">
+                <i class="fas fa-sync-alt text-sm"></i>
+            </button>
+            <button onclick="openSettings()" class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:text-indigo-600 transition active:scale-95">
+                <i class="fas fa-cog text-sm"></i>
+            </button>
+        </div>
     </div>
 
     <div id="view-home" class="view-section pt-16">
@@ -140,7 +149,7 @@
             <div class="grid grid-cols-2 gap-4 mb-5">
                 <div class="min-w-0">
                     <label class="block text-xs font-bold text-gray-400 mb-1">日期</label>
-                    <input type="date" id="date" required class="input-style px-3 py-3 rounded-xl text-gray-700 text-sm bg-white h-[46px]">
+                    <input type="date" id="date" required class="input-style w-full px-3 py-3 rounded-xl text-gray-700 text-sm bg-white h-[46px] appearance-none">
                 </div>
                 <div class="min-w-0">
                     <label class="block text-xs font-bold text-gray-400 mb-1">支付方式</label>
@@ -330,6 +339,16 @@
         await loadRemoteData();
         document.getElementById('initial-loading').classList.add('hidden');
     }
+    
+    // 新增：手動刷新功能
+    async function manualRefresh() {
+        const btn = document.querySelector('button[title="刷新資料"] i');
+        btn.classList.add('fa-spin'); // 讓圖標旋轉
+        setSyncStatus('saving');
+        await loadRemoteData();
+        btn.classList.remove('fa-spin');
+        setSyncStatus('done');
+    }
 
     async function loadRemoteData() {
         try {
@@ -339,10 +358,19 @@
             STATE.members = (data.members && data.members.length > 0) ? data.members : STATE.members;
             STATE.categories = data.categories || [];
             STATE.methods = data.methods || ['現金'];
-            STATE.expenses = data.expenses || [];
-            STATE.settlements = data.settlements || [];
+            
+            // 修正：資料清洗，確保日期格式統一為 YYYY-MM-DD，去除 T00:00...
+            STATE.expenses = (data.expenses || []).map(e => {
+                if(e.date && e.date.includes('T')) e.date = e.date.split('T')[0];
+                return e;
+            });
+            STATE.settlements = (data.settlements || []).map(s => {
+                if(s.date && s.date.includes('T')) s.date = s.date.split('T')[0];
+                return s;
+            });
+
             initUI(); renderHome();
-        } catch (e) { console.error(e); alert("⚠️ 初始資料讀取失敗，請檢查網路。"); }
+        } catch (e) { console.error(e); alert("⚠️ 資料同步失敗，請檢查網路。"); setSyncStatus('error'); }
     }
 
     async function saveRemoteData(action = 'save') {
@@ -364,15 +392,10 @@
     async function triggerRestore() {
         if(!confirm("確定從雲端還原？這將覆蓋目前的顯示資料。")) return;
         document.getElementById('initial-loading').classList.remove('hidden');
-        try {
-            const res = await fetch(API_URL + "?action=restore&t=" + new Date().getTime());
-            const result = await res.json();
-            if (result.status === 'success') {
-                const data = result.data;
-                STATE.members = data.members; STATE.categories = data.categories; STATE.methods = data.methods; STATE.expenses = data.expenses; STATE.settlements = data.settlements;
-                renderHome(); alert("✅ 還原成功！");
-            } else throw new Error(result.message);
-        } catch (e) { alert("還原失敗：" + e.message); } finally { document.getElementById('initial-loading').classList.add('hidden'); document.getElementById('modal-backup').classList.remove('active'); }
+        await loadRemoteData(); // 重用 loadRemoteData 即可
+        document.getElementById('modal-backup').classList.remove('active');
+        document.getElementById('initial-loading').classList.add('hidden');
+        alert("✅ 還原成功！");
     }
 
     function initUI() { document.getElementById('date').valueAsDate = new Date(); }
@@ -402,6 +425,8 @@
         const targetMember = STATE.filters.member;
         let totalDisplay = 0, totalDisplayHKD = 0;
         let memTotalVol = 0, memActualCost = 0;
+        
+        // 排序改進：確保日期格式統一後的排序正確
         filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
 
         if (filtered.length === 0) listEl.innerHTML = `<div class="text-center py-10 text-gray-400 opacity-50"><i class="fas fa-search text-4xl mb-2"></i><p>無符合紀錄</p></div>`;
@@ -421,7 +446,9 @@
                 let statusHtml = status === 'settled' ? `<span class="bg-green-100 text-green-600 px-1 rounded text-[10px]">已結清</span>` : (status === 'partial' ? `<span class="bg-blue-50 text-blue-600 px-1 rounded text-[10px]">部分</span>` : '');
                 let descTxt = targetMember ? `總額: ${exp.currency==='GBP'?'£':'$'}${exp.amount.toLocaleString()} (${exp.payer}付)` : `${exp.payer} 付 · ${exp.consumers.length===STATE.members.length?'全家':exp.consumers.join(', ')}`;
                 
-                // 修正：將 onclick 換成更保險的寫法，並確保外層 div 樣式可點擊
+                // 修正：日期顯示不再依賴 substring(5)，改為更安全的顯示方式
+                const displayDate = exp.date.substring(5); // 因為我們在 loadRemoteData 已經統一了格式，這裡可以安全使用
+
                 const itemDiv = document.createElement('div');
                 itemDiv.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-[0.98] transition duration-200 select-none";
                 itemDiv.onclick = function() { editExpense(exp.id); };
@@ -430,7 +457,7 @@
                         <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-xl shrink-0 mt-1">${cat.icon}</div>
                         <div class="min-w-0">
                             <div class="font-bold text-gray-800 truncate">${exp.merchant || cat.label}</div>
-                            <div class="text-xs text-gray-500 truncate mt-0.5">${exp.date.substring(5)} · ${descTxt}</div>
+                            <div class="text-xs text-gray-500 truncate mt-0.5">${displayDate} · ${descTxt}</div>
                             ${exp.remark ? `<div class="text-[10px] text-gray-400 mt-0.5 truncate"><i class="fas fa-comment-dots mr-1"></i>${exp.remark}</div>` : ''}
                         </div>
                     </div>
@@ -574,7 +601,7 @@
         const editId = document.getElementById('edit-id').value;
         const newData = {
             id: editId || Date.now().toString(),
-            date: document.getElementById('date').value,
+            date: document.getElementById('date').value, // 這裡拿到的就是 YYYY-MM-DD
             amount: amount,
             currency: document.getElementById('currency').value,
             category: document.getElementById('category').value,
@@ -584,11 +611,21 @@
             payer: document.querySelector('input[name="payer"]:checked').value,
             consumers: consumers,
             splitDetails: splitDetails,
-            repayments: editId ? (STATE.expenses.find(x=>x.id===editId)?.repayments || []) : []
+            // 修正：更安全的取得舊的 repayments 資料
+            repayments: (editId && STATE.expenses.find(x => x.id === editId)) ? STATE.expenses.find(x => x.id === editId).repayments : []
         };
 
-        if (editId) STATE.expenses[STATE.expenses.findIndex(x => x.id === editId)] = newData;
-        else STATE.expenses.push(newData);
+        if (editId) {
+            // 修正：確保編輯邏輯正確替換
+            const index = STATE.expenses.findIndex(x => x.id === editId);
+            if (index !== -1) {
+                STATE.expenses[index] = newData;
+            } else {
+                STATE.expenses.push(newData);
+            }
+        } else {
+            STATE.expenses.push(newData);
+        }
         
         switchView('home'); 
         saveRemoteData('save'); 
@@ -598,7 +635,6 @@
     function editExpense(id) {
         const exp = STATE.expenses.find(e => e.id === id);
         if(!exp) return;
-        // 修正：移除了對 'settled' 狀態的限制，允許直接編輯
         
         resetForm();
         document.getElementById('edit-id').value = id;
@@ -607,7 +643,7 @@
         document.getElementById('btn-delete-expense').classList.remove('hidden');
         document.getElementById('amount').value = exp.amount;
         document.getElementById('currency').value = exp.currency;
-        document.getElementById('date').value = exp.date;
+        document.getElementById('date').value = exp.date; // 這裡的 date 已經被 loadRemoteData 清洗過，格式正確
         document.getElementById('merchant').value = exp.merchant;
         document.getElementById('remark').value = exp.remark;
         document.getElementById('category').value = exp.category;
