@@ -444,51 +444,81 @@
         const listEl = document.getElementById('expense-list');
         listEl.innerHTML = '';
         const targetMember = STATE.filters.member;
+        
         let totalDisplay = 0, totalDisplayHKD = 0;
         let memTotalVol = 0, memActualCost = 0;
-        
-        // 排序改進：確保日期格式統一後的排序正確
+
+        // 排序：日期新 -> 舊
         filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-        if (filtered.length === 0) listEl.innerHTML = `<div class="text-center py-10 text-gray-400 opacity-50"><i class="fas fa-search text-4xl mb-2"></i><p>無符合紀錄</p></div>`;
-        else {
+        if (filtered.length === 0) {
+            listEl.innerHTML = `<div class="text-center py-10 text-gray-400 opacity-50"><i class="fas fa-search text-4xl mb-2"></i><p>無符合紀錄</p></div>`;
+        } else {
             filtered.forEach(exp => {
+                // --- 計算顯示金額邏輯 ---
                 let displayAmount = exp.amount;
                 let isMyPart = true;
                 if (targetMember) {
                     if (Object.keys(exp.splitDetails).length > 0) displayAmount = exp.splitDetails[targetMember] || 0;
                     else if (exp.consumers.includes(targetMember)) displayAmount = exp.amount / exp.consumers.length;
                     else { displayAmount = 0; isMyPart = false; }
-                    if (exp.currency === 'GBP') { if (isMyPart) memTotalVol += exp.amount; memActualCost += displayAmount; }
+                    
+                    if (exp.currency === 'GBP') {
+                        if (isMyPart) memTotalVol += exp.amount;
+                        memActualCost += displayAmount;
+                    }
                 }
+
                 if (exp.currency === 'GBP') totalDisplay += displayAmount; else totalDisplayHKD += displayAmount;
+                
+                // --- 顯示資訊準備 ---
                 const cat = STATE.categories.find(c => c.id === exp.category) || (STATE.categories[0] || {icon:'?',label:'未分類',color:''});
                 const status = getExpenseStatus(exp);
                 let statusHtml = status === 'settled' ? `<span class="bg-green-100 text-green-600 px-1 rounded text-[10px]">已結清</span>` : (status === 'partial' ? `<span class="bg-blue-50 text-blue-600 px-1 rounded text-[10px]">部分</span>` : '');
+                
                 let descTxt = targetMember ? `總額: ${exp.currency==='GBP'?'£':'$'}${exp.amount.toLocaleString()} (${exp.payer}付)` : `${exp.payer} 付 · ${exp.consumers.length===STATE.members.length?'全家':exp.consumers.join(', ')}`;
                 
-                // 修正：日期顯示不再依賴 substring(5)，改為更安全的顯示方式
-                const displayDate = exp.date.substring(5); // 因為我們在 loadRemoteData 已經統一了格式，這裡可以安全使用
+                // --- 新增功能：支付方式 + 備註 組合顯示 ---
+                // 邏輯：如果有支付方式或備註，就顯示這一行。支付方式在前，備註在後。
+                let detailsHtml = '';
+                if (exp.paymentMethod || exp.remark) {
+                    detailsHtml = `<div class="text-[10px] text-gray-400 mt-0.5 truncate">`;
+                    
+                    // 1. 支付方式 (無 LOGO，純文字)
+                    if (exp.paymentMethod) {
+                        // 如果後面還有備註，右邊加一點間距 (mr-2)
+                        const marginClass = exp.remark ? 'mr-2' : '';
+                        detailsHtml += `<span class="${marginClass}">${exp.paymentMethod}</span>`;
+                    }
+                    
+                    // 2. 備註 (保留原本的小圖示)
+                    if (exp.remark) {
+                        detailsHtml += `<span><i class="fas fa-comment-dots mr-1"></i>${exp.remark}</span>`;
+                    }
+                    
+                    detailsHtml += `</div>`;
+                }
+                // ----------------------------------------
 
-                const itemDiv = document.createElement('div');
-                itemDiv.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-[0.98] transition duration-200 select-none";
-                itemDiv.onclick = function() { editExpense(exp.id); };
-                itemDiv.innerHTML = `
-                    <div class="flex items-start gap-3 overflow-hidden pointer-events-none">
+                listEl.innerHTML += `
+                <div class="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-[0.98] transition duration-200" onclick="editExpense('${exp.id}')">
+                    <div class="flex items-start gap-3 overflow-hidden">
                         <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-xl shrink-0 mt-1">${cat.icon}</div>
                         <div class="min-w-0">
                             <div class="font-bold text-gray-800 truncate">${exp.merchant || cat.label}</div>
-                            <div class="text-xs text-gray-500 truncate mt-0.5">${displayDate} · ${descTxt}</div>
-                            ${exp.remark ? `<div class="text-[10px] text-gray-400 mt-0.5 truncate"><i class="fas fa-comment-dots mr-1"></i>${exp.remark}</div>` : ''}
+                            <div class="text-xs text-gray-500 truncate mt-0.5">${exp.date.substring(5)} · ${descTxt}</div>
+                            ${detailsHtml}
                         </div>
                     </div>
-                    <div class="text-right shrink-0 pointer-events-none">
+                    <div class="text-right shrink-0">
                         <div class="font-bold ${exp.currency==='HKD'?'text-pink-600':'text-indigo-600'} text-lg">${exp.currency==='GBP'?'£':'$'}${displayAmount.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</div>
                         <div class="mt-1">${statusHtml}</div>
-                    </div>`;
-                listEl.appendChild(itemDiv);
+                    </div>
+                </div>`;
             });
         }
+        
+        // 更新上方總金額顯示
         document.getElementById('home-total-gbp').innerText = totalDisplay.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1});
         document.getElementById('home-total-hkd').innerText = totalDisplayHKD.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1});
         
@@ -504,6 +534,7 @@
         
         const hasFilter = STATE.filters.start || STATE.filters.status !== 'unsettled' || STATE.filters.member;
         document.getElementById('filter-dot').classList.toggle('hidden', !hasFilter);
+        
         const bar = document.getElementById('active-filters-bar');
         bar.innerHTML = '';
         if (STATE.filters.member) bar.innerHTML += `<span class="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-full font-bold">👤 ${STATE.filters.member}</span>`;
