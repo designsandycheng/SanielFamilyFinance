@@ -354,23 +354,44 @@
         try {
             const res = await fetch(API_URL + "?t=" + new Date().getTime());
             const data = await res.json();
+            
             if (data.status === 'error') throw new Error(data.message);
+            
             STATE.members = (data.members && data.members.length > 0) ? data.members : STATE.members;
             STATE.categories = data.categories || [];
             STATE.methods = data.methods || ['現金'];
             
-            // 修正：資料清洗，確保日期格式統一為 YYYY-MM-DD，去除 T00:00...
+            // --- 核心修正開始 ---
+            // 強制將所有 ID 轉為字串，並修正日期格式
             STATE.expenses = (data.expenses || []).map(e => {
-                if(e.date && e.date.includes('T')) e.date = e.date.split('T')[0];
+                if (e.id !== undefined && e.id !== null) {
+                    e.id = String(e.id); // 強制轉為字串
+                }
+                // 處理 Google Sheet 可能回傳的 ISO 日期字串 (含 T)
+                if (e.date && typeof e.date === 'string' && e.date.includes('T')) {
+                    e.date = e.date.split('T')[0];
+                }
                 return e;
             });
+
             STATE.settlements = (data.settlements || []).map(s => {
-                if(s.date && s.date.includes('T')) s.date = s.date.split('T')[0];
+                if (s.id !== undefined && s.id !== null) {
+                    s.id = String(s.id); // 強制轉為字串
+                }
+                if (s.date && typeof s.date === 'string' && s.date.includes('T')) {
+                    s.date = s.date.split('T')[0];
+                }
                 return s;
             });
+            // --- 核心修正結束 ---
 
-            initUI(); renderHome();
-        } catch (e) { console.error(e); alert("⚠️ 資料同步失敗，請檢查網路。"); setSyncStatus('error'); }
+            initUI();
+            renderHome();
+        } catch (e) {
+            console.error(e);
+            alert("⚠️ 資料同步失敗，請檢查網路。\n錯誤：" + e.message);
+            setSyncStatus('error');
+        }
     }
 
     async function saveRemoteData(action = 'save') {
@@ -583,6 +604,8 @@
         e.preventDefault();
         const amount = parseFloat(document.getElementById('amount').value);
         if (!amount) return alert("請輸入金額");
+        
+        // (省略中間的分帳計算邏輯，保持您原本的代碼不變...)
         let consumers = [], splitDetails = {};
         if (STATE.splitMode === 'equal') {
             const cbs = document.querySelectorAll('input[name="consumer_cb"]:checked');
@@ -597,11 +620,25 @@
                 consumers.push(mem);
             });
         }
+        // (省略結束)
 
-        const editId = document.getElementById('edit-id').value;
+        // --- 核心修正開始 ---
+        // 取得 ID 並確保它是字串
+        const rawEditId = document.getElementById('edit-id').value;
+        const editId = rawEditId ? String(rawEditId) : null;
+
+        // 嘗試在現有資料中尋找 (比對時兩邊都確保是字串)
+        const existingIndex = editId ? STATE.expenses.findIndex(x => String(x.id) === editId) : -1;
+        
+        // 為了保留還款紀錄 (repayments)，如果是在編輯，要先撈出舊的 repayments
+        let oldRepayments = [];
+        if (existingIndex !== -1) {
+            oldRepayments = STATE.expenses[existingIndex].repayments || [];
+        }
+
         const newData = {
             id: editId || Date.now().toString(),
-            date: document.getElementById('date').value, // 這裡拿到的就是 YYYY-MM-DD
+            date: document.getElementById('date').value,
             amount: amount,
             currency: document.getElementById('currency').value,
             category: document.getElementById('category').value,
@@ -611,24 +648,20 @@
             payer: document.querySelector('input[name="payer"]:checked').value,
             consumers: consumers,
             splitDetails: splitDetails,
-            // 修正：更安全的取得舊的 repayments 資料
-            repayments: (editId && STATE.expenses.find(x => x.id === editId)) ? STATE.expenses.find(x => x.id === editId).repayments : []
+            repayments: oldRepayments // 繼承舊資料
         };
 
-        if (editId) {
-            // 修正：確保編輯邏輯正確替換
-            const index = STATE.expenses.findIndex(x => x.id === editId);
-            if (index !== -1) {
-                STATE.expenses[index] = newData;
-            } else {
-                STATE.expenses.push(newData);
-            }
+        if (existingIndex !== -1) {
+            // 找到了！執行更新 (改寫)
+            STATE.expenses[existingIndex] = newData;
         } else {
+            // 沒找到，執行新增
             STATE.expenses.push(newData);
         }
+        // --- 核心修正結束 ---
         
-        switchView('home'); 
-        saveRemoteData('save'); 
+        switchView('home');
+        saveRemoteData('save');
         resetForm();
     }
 
